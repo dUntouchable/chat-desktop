@@ -1,29 +1,11 @@
 'use client'
 import React, { useState, useRef, useEffect } from 'react';
 import AutoExpandingInput from '@/components/AutoExpandingInput';
-import { Switch } from "@/components/ui/switch";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Button } from "@/components/ui/button";
-import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
-
 
 interface ChatMessage {
   text: string;
   sender: 'user' | 'bot';
 }
-
-interface ChatWindow {
-  id: string;
-  title: string;
-  messages: ChatMessage[];
-  isVisible: boolean;
-}
-
-const DEFAULT_WINDOWS: ChatWindow[] = [
-  { id: 'llama', title: 'Llama', messages: [], isVisible: true },
-  { id: 'anthropic', title: 'Anthropic', messages: [], isVisible: true },
-  { id: 'openai', title: 'OpenAI', messages: [], isVisible: true }
-];
 
 const parseMarkdown = (text: string): React.ReactNode[] => {
   // First split by code blocks to preserve them
@@ -125,7 +107,10 @@ const processBoldText = (text: string): React.ReactNode[] => {
   });
 };
 
-const ChatWindowComponent: React.FC<{ messages: ChatMessage[]; title: string }> = ({ messages, title }) => {
+
+
+// Separate ChatWindow component
+const ChatWindow: React.FC<{ messages: ChatMessage[]; title: string }> = ({ messages, title }) => {
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -169,47 +154,6 @@ const ChatWindowComponent: React.FC<{ messages: ChatMessage[]; title: string }> 
   );
 };
 
-const SidePanel: React.FC<{
-  windows: ChatWindow[];
-  onToggleWindow: (id: string) => void;
-  isOpen: boolean;
-  onTogglePanel: () => void;
-}> = ({ windows, onToggleWindow, isOpen, onTogglePanel }) => {
-  return (
-    <div className={`
-      fixed left-0 top-0 h-full bg-white dark:bg-gray-800 shadow-lg
-      transition-all duration-300 z-10
-      ${isOpen ? 'w-64' : 'w-12'}
-    `}>
-      <Button
-        variant="ghost"
-        size="icon"
-        className="absolute right-2 top-2"
-        onClick={onTogglePanel}
-      >
-        {isOpen ? <PanelLeftClose /> : <PanelLeftOpen />}
-      </Button>
-
-      {isOpen && (
-        <ScrollArea className="h-full pt-14 px-4">
-          <div className="space-y-4">
-            <h3 className="font-semibold text-lg dark:text-white">Chat Windows</h3>
-            {windows.map((window) => (
-              <div key={window.id} className="flex items-center justify-between">
-                <span className="dark:text-white">{window.title}</span>
-                <Switch
-                  checked={window.isVisible}
-                  onCheckedChange={() => onToggleWindow(window.id)}
-                />
-              </div>
-            ))}
-          </div>
-        </ScrollArea>
-      )}
-    </div>
-  );
-};
-
 // Error Boundary Component
 class ChatErrorBoundary extends React.Component<{ children: React.ReactNode }> {
   state = { hasError: false };
@@ -234,113 +178,77 @@ class ChatErrorBoundary extends React.Component<{ children: React.ReactNode }> {
 // Main Chat Interface Component
 export default function ChatInterface() {
   const [inputMessage, setInputMessage] = useState('');
-  const [windows, setWindows] = useState<ChatWindow[]>(DEFAULT_WINDOWS);
+  const [chatMessages1, setChatMessages1] = useState<ChatMessage[]>([]);
+  const [chatMessages2, setChatMessages2] = useState<ChatMessage[]>([]);
+  const [chatMessages3, setChatMessages3] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [isPanelOpen, setIsPanelOpen] = useState(true);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!inputMessage.trim() || isLoading) return;
 
     const userMessage: ChatMessage = { text: inputMessage, sender: 'user' };
-
-    const visibleWindowIds = windows
-    .filter(w => w.isVisible)
-    .map(w => w.id);
     
-    setWindows(prev => prev.map(window => ({
-      ...window,
-      messages: window.isVisible ? [...window.messages, userMessage] : window.messages
-    })));
+    // Add user message immediately
+    setChatMessages1(prev => [...prev, userMessage]);
+    setChatMessages2(prev => [...prev, userMessage]);
+    setChatMessages3(prev => [...prev, userMessage]);
     
-    setInputMessage('');
+    setInputMessage(''); // Clear input immediately
     setIsLoading(true);
 
     try {
-      const queryParams = new URLSearchParams({
-        message: inputMessage,
-        windows: visibleWindowIds.join(',')
-      });
-  
-      const response = await fetch(`/api/chat?${queryParams}`, {
+      const response = await fetch(`/api/chat?message=${encodeURIComponent(inputMessage)}`, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
         },
       });
-  
-      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
       const data = await response.json();
+
+      if (data.error) {
+        throw new Error(data.error);
+      }
       
-      if (data.error) throw new Error(data.error);
-      
-      // Update only the visible windows with their responses
-      setWindows(prev => prev.map(window => {
-        if (!window.isVisible) return window;
-        
-        const responseKey = `response${window.id}`;
-        if (data[responseKey]) {
-          return {
-            ...window,
-            messages: [...window.messages, { text: data[responseKey], sender: 'bot' }]
-          };
-        }
-        return window;
-      }));
-  
+      // Add bot responses
+      if (data.response1) {
+        setChatMessages1(prev => [...prev, { text: data.response1, sender: 'bot' }]);
+      }
+      if (data.response2) {
+        setChatMessages2(prev => [...prev, { text: data.response2, sender: 'bot' }]);
+      }
+      if (data.response3) {
+        setChatMessages3(prev => [...prev, { text: data.response3, sender: 'bot' }]);
+      }
     } catch (error) {
       console.error('Error:', error);
       const errorMessage: ChatMessage = { 
         text: "Sorry, there was an error processing your request. Please try again.",
         sender: 'bot'
       };
-      
-      setWindows(prev => prev.map(window => ({
-        ...window,
-        messages: window.isVisible ? [...window.messages, errorMessage] : window.messages
-      })));
+      setChatMessages1(prev => [...prev, errorMessage]);
+      setChatMessages2(prev => [...prev, errorMessage]);
+      setChatMessages3(prev => [...prev, errorMessage]);
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleToggleWindow = (id: string) => {
-    setWindows(prev => prev.map(window => 
-      window.id === id ? { ...window, isVisible: !window.isVisible } : window
-    ));
-  };
-
-  const visibleWindows = windows.filter(w => w.isVisible);
-  const gridCols = visibleWindows.length > 0 ? visibleWindows.length : 1;
-
   return (
     <div className="flex flex-col min-h-screen bg-gray-100 dark:bg-gray-900 pb-[100px]">
-      <div className="flex-1 overflow-hidden relative">
-        <SidePanel
-          windows={windows}
-          onToggleWindow={handleToggleWindow}
-          isOpen={isPanelOpen}
-          onTogglePanel={() => setIsPanelOpen(!isPanelOpen)}
-        />
-        
-        <div className={`transition-all duration-300 ${isPanelOpen ? 'ml-64' : 'ml-12'}`}>
-          <div className="p-4">
-            <div 
-              className="grid gap-4"
-              style={{
-                gridTemplateColumns: `repeat(${gridCols}, minmax(0, 1fr))`
-              }}
-            >
-              {visibleWindows.map(window => (
-                <ChatWindowComponent
-                  key={window.id}
-                  messages={window.messages}
-                  title={window.title}
-                />
-              ))}
-            </div>
+      <div className="flex-1 p-4 overflow-hidden relative">
+        <ChatErrorBoundary>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <ChatWindow messages={chatMessages1} title="Llama" />
+            <ChatWindow messages={chatMessages2} title="Anthropic" />
+            <ChatWindow messages={chatMessages3} title="OpenAI" />
           </div>
-        </div>
+        </ChatErrorBoundary>
       </div>
       
       <AutoExpandingInput
@@ -352,4 +260,3 @@ export default function ChatInterface() {
     </div>
   );
 }
-

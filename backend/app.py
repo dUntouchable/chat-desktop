@@ -8,7 +8,7 @@ from my_openai import OpenaiClient
 from dotenv import load_dotenv
 from concurrent.futures import ThreadPoolExecutor
 
-app = Flask(name)
+app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
 
 # Load environment variables
@@ -35,7 +35,6 @@ async def get_all_responses(message):
 
     # Wait for all tasks to complete
     responses = await asyncio.gather(*tasks)
-    print(responses)
 
     return {
         'response1': responses[0],
@@ -48,7 +47,6 @@ async def chat():
     try:
         # Get message from query parameters
         message = request.args.get('message')
-        # print(f"Received message: {message}")  # Debug print
 
         if not message:
             return jsonify({
@@ -57,7 +55,6 @@ async def chat():
 
         responses = await get_all_responses(message)
 
-        # print("Sending responses:", responses)
         return jsonify(responses)
 
     except Exception as e:
@@ -66,5 +63,5 @@ async def chat():
             'error': 'Internal server error processing chat request'
         }), 500
 
-if name == 'main':
+if __name__ == '__main__':
     app.run(debug=True)

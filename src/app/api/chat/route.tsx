@@ -35,18 +35,18 @@ export async function GET(
     }
 
     // Call Flask backend
-    const response = await fetch(${FLASK_API_URL}/chat?message=${encodeURIComponent(message)}, {
+    const response = await fetch(`${FLASK_API_URL}/chat?message=${encodeURIComponent(message)}`, {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
       },
       cache: 'no-store',
     });
-
+    
     if (!response.ok) {
-      throw new Error(Flask server error: ${response.status});
+      throw new Error(`Flask server error: ${response.status}`);
     }
-
+    
     const data = await response.json() as FlaskResponse;
 
     // Return the response
@@ -79,7 +79,7 @@ export async function POST(
       );
     }
 
-    const response = await fetch(${FLASK_API_URL}/chat, {
+    const response = await fetch(`${FLASK_API_URL}/chat`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -89,7 +89,7 @@ export async function POST(
     });
 
     if (!response.ok) {
-      throw new Error(Flask server error: ${response.status});
+      throw new Error(`Flask server error: ${response.status}`);
     }
 
     const data = await response.json() as FlaskResponse;

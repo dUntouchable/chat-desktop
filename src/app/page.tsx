@@ -303,14 +303,14 @@ export default function ChatInterface() {
             </div>
           </div>
         </div>
+        <AutoExpandingInput
+          value={inputMessage}
+          onChange={(e) => setInputMessage(e.target.value)}
+          onSubmit={handleSubmit}
+          isLoading={isLoading}
+          isPanelOpen={isPanelOpen}
+        />
       </div>
-      
-      <AutoExpandingInput
-        value={inputMessage}
-        onChange={(e) => setInputMessage(e.target.value)}
-        onSubmit={handleSubmit}
-        isLoading={isLoading}
-      />
     </div>
   );
 }

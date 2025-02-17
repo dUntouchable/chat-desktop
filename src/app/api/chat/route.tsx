@@ -7,82 +7,137 @@ export interface ChatRequestBody {
   activeWindows?: ChatWindowId[]; // Optional array of active window IDs
 }
 
-export interface ChatResponseBody {
-  [key: string]: string | undefined; // Dynamic response fields
-  error?: string;
+export interface StreamChunk {
+  model: string;
+  chunk: string;
 }
 
-export interface FlaskResponse {
-  [key: string]: string; // Dynamic response fields from Flask
-}
-
-const RESPONSE_KEY_MAP: Record<ChatWindowId, string> = {
-  llama: 'response1',
-  anthropic: 'response2',
-  openai: 'response3'
-};
+export const runtime = 'edge'; // Enable edge runtime for streaming
 
 const FLASK_API_URL = process.env.NEXT_PUBLIC_FLASK_API_URL || 'http://127.0.0.1:5000';
+const FETCH_TIMEOUT = 25000; // 25 seconds for initial connection
+const STREAM_CHUNK_TIMEOUT = 15000; // 15 seconds between chunks
+const MAX_TOTAL_STREAM_DURATION = 30000; // 30 seconds total stream duration
 
-export async function GET(
-  request: NextRequest
-): Promise<NextResponse<ChatResponseBody>> {
+export async function POST(request: NextRequest) {
+  // Create AbortController for the fetch request
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
+  const streamStartTime = Date.now();
+
   try {
-    // Get message from query parameters
-    const searchParams = request.nextUrl.searchParams;
-    const message = searchParams.get('message');
-    const activeWindows = searchParams.get('activeWindows')?.split(',') as ChatWindowId[];
-
-    if (!message) {
-      return NextResponse.json(
-        { error: 'Message is required' },
-        { status: 400 }
-      );
-    }
-
-    let flaskUrl = `${FLASK_API_URL}/chat?message=${encodeURIComponent(message)}`;
-    if (activeWindows?.length) {
-      flaskUrl += `&windows=${activeWindows.join(',')}`;
-    }
-    const response = await fetch(flaskUrl, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      cache: 'no-store',
+    const data: ChatRequestBody = await request.json();
+    let flaskUrl = `${FLASK_API_URL}/chat-stream`;
+    
+    const flaskResponse = await fetch(flaskUrl, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(data),
     });
-    if (!response.ok) {
-      throw new Error(`Flask server error: ${response.status}`);
-    }
-    
-    const flaskData = await response.json() as FlaskResponse;
-    
-    // Transform response based on active windows
-    const responseData: ChatResponseBody = {};
-    
-    // If activeWindows is provided, only include those responses
-    if (activeWindows?.length) {
-      activeWindows.forEach(windowId => {
-        const flaskKey = RESPONSE_KEY_MAP[windowId];
-        if (flaskData[flaskKey]) {
-          responseData[windowId] = flaskData[flaskKey];
-        }
-      });
-    } else {
-      // Fallback to including all responses
-      Object.entries(RESPONSE_KEY_MAP).forEach(([windowId, flaskKey]) => {
-        if (flaskData[flaskKey]) {
-          responseData[windowId] = flaskData[flaskKey];
-        }
-      });
-    }
-    return NextResponse.json(responseData);
 
+    clearTimeout(timeoutId);
+
+    if (!flaskResponse.ok) {
+      throw new Error(`Flask server error: ${flaskResponse.status}`);
+    }
+
+    const stream = new ReadableStream({
+      async start(controller) {
+        const reader = flaskResponse.body!.getReader();
+        const textDecoder = new TextDecoder();
+        let chunkTimeoutId: NodeJS.Timeout | undefined = undefined;
+        let buffer = '';
+        
+        const resetChunkTimeout = () => {
+          if (chunkTimeoutId) {
+            clearTimeout(chunkTimeoutId);
+          }
+          chunkTimeoutId = setTimeout(() => {
+            reader.cancel('Stream chunk timeout exceeded');
+            controller.error(new Error('No data received within the chunk timeout period'));
+          }, STREAM_CHUNK_TIMEOUT);
+        };
+
+        try {
+          while (true) {
+            // Check total stream duration
+            if (Date.now() - streamStartTime > MAX_TOTAL_STREAM_DURATION) {
+              throw new Error('Maximum stream duration exceeded');
+            }
+            // Reset timeout for next chunk
+            resetChunkTimeout();
+            const { done, value } = await reader.read();
+
+            if (done) break;
+
+            buffer += textDecoder.decode(value, { stream: true });
+            
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+
+            for (const line of lines) {
+              if (line.trim() && line.startsWith('data: ')) {
+                try {
+                  // Remove 'data: ' prefix before parsing
+                  const jsonStr = line.slice(5).trim();
+                  const parsedChunk: StreamChunk = JSON.parse(jsonStr);
+                  
+                  // Filter based on activeWindows if specified
+                  if (!data.activeWindows?.length || 
+                      data.activeWindows.includes(parsedChunk.model as ChatWindowId)) {
+                    // Encode the parsed chunk as SSE format
+                    const encodedChunk = `data: ${JSON.stringify(parsedChunk)}\n\n`;
+                    controller.enqueue(new TextEncoder().encode(encodedChunk));
+                  }
+                } catch (e) {
+                  console.error('Error parsing chunk:', e);
+                  // Continue processing other chunks even if one fails
+                }
+              }
+            }
+          }
+
+          // Handle the final chunk separately
+          if (buffer.trim() && buffer.startsWith('data: ')) {
+            try {
+              const jsonStr = buffer.slice(5).trim();
+              const parsedChunk: StreamChunk = JSON.parse(jsonStr);
+              
+              if (!data.activeWindows?.length || 
+                  data.activeWindows.includes(parsedChunk.model as ChatWindowId)) {
+                const encodedChunk = `data: ${JSON.stringify(parsedChunk)}\n\n`;
+                controller.enqueue(new TextEncoder().encode(encodedChunk));
+              }
+            } catch (e) {
+              console.error('Error parsing final chunk:', e);
+            }
+          }
+          
+          if (chunkTimeoutId) clearTimeout(chunkTimeoutId);
+          controller.close();
+        } catch (error) {
+          if (chunkTimeoutId) clearTimeout(chunkTimeoutId);
+          controller.error(error);
+        }
+      }
+    });
+
+    return new NextResponse(stream, {
+      status: flaskResponse.status,
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+      },
+    });
   } catch (error) {
     console.error('API Route Error:', error);
-    return NextResponse.json(
-      { error: 'Internal Server Error' },
-      { status: 500 }
+    return new Response(
+      JSON.stringify({ error: 'Internal Server Error' }),
+      { 
+        status: 500,
+        headers: { 'Content-Type': 'application/json' }
+      }
     );
   }
 }

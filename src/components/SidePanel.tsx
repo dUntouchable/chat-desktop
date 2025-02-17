@@ -11,15 +11,6 @@ const SidePanel: React.FC<{
   onTogglePanel: () => void;
 }> = ({ windows, onToggleWindow, isOpen, onTogglePanel }) => {
 
-    console.log('SidePanel rendered, isOpen:', isOpen);
-
-    const handlePanelToggle = () => {
-        console.log('Toggle button clicked');
-        console.log('Current panel state before toggle:', isOpen);
-        onTogglePanel();
-        console.log('Panel toggle function called');
-    };
-  
     return (
         <div
         className={`
@@ -32,7 +23,7 @@ const SidePanel: React.FC<{
             variant="ghost"
             size="icon"
             className="absolute right-2 top-2 z-20 pointer-events-auto"
-            onClick={handlePanelToggle}
+            onClick={onTogglePanel}
             aria-label={isOpen ? "Close panel" : "Open panel"}
         >
             {isOpen ? <PanelLeftClose /> : <PanelLeftOpen />}
@@ -48,7 +39,6 @@ const SidePanel: React.FC<{
                     <Switch
                     checked={window.isVisible}
                     onCheckedChange={() => {
-                        console.log('Toggling window:', window.id);
                         onToggleWindow(window.id);
                       }}
                     />

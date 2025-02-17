@@ -1,5 +1,5 @@
 'use client'
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import AutoExpandingInput from '@/components/AutoExpandingInput';
 import SidePanel from '@/components/SidePanel';
 import { ChatMessage, ChatWindow } from '@/types/chat';
@@ -9,6 +9,13 @@ const DEFAULT_WINDOWS: ChatWindow[] = [
   { id: 'anthropic', title: 'Anthropic', messages: [], isVisible: true },
   { id: 'openai', title: 'OpenAI', messages: [], isVisible: true }
 ];
+
+const MODEL_TO_WINDOW_MAP: Record<string, string> = {
+  'response1': 'llama',
+  'response2': 'anthropic',
+  'response3': 'openai'
+};
+
 
 const parseMarkdown = (text: string): React.ReactNode[] => {
   // First split by code blocks to preserve them
@@ -176,8 +183,6 @@ class ChatErrorBoundary extends React.Component<{ children: React.ReactNode }> {
   }
 }
 
-
-
 // Main Chat Interface Component
 export default function ChatInterface() {
   const [inputMessage, setInputMessage] = useState('');
@@ -185,9 +190,33 @@ export default function ChatInterface() {
   const [isLoading, setIsLoading] = useState(false);
   const [isPanelOpen, setIsPanelOpen] = useState(false);
 
+  const responseAccumulator = useRef<Record<string, string>>({
+    llama: '',
+    anthropic: '',
+    openai: ''
+  });
+
+  const updateWindowWithMessage = useCallback((windowId: string, message: ChatMessage) => {
+    setWindows(prev => prev.map(window => {
+      if (window.id === windowId && window.isVisible) {
+        return {
+          ...window,
+          messages: [...window.messages, message]
+        };
+      }
+      return window;
+    }));
+  }, []);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!inputMessage.trim() || isLoading) return;
+
+    responseAccumulator.current = {
+      llama: '',
+      anthropic: '',
+      openai: ''
+    };
 
     const userMessage: ChatMessage = { text: inputMessage, sender: 'user' };
 
@@ -204,43 +233,92 @@ export default function ChatInterface() {
     setIsLoading(true);
 
     try {
-      const queryParams = new URLSearchParams({
-        message: inputMessage,
-        windows: visibleWindowIds.join(',')
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: inputMessage,
+          windows: visibleWindowIds
+        }),
       });
-  
-      const response = await fetch(`/api/chat?${queryParams}`, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      });
-  
-      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-      const data = await response.json();
-      console.log(data)
-      
-      if (data.error) throw new Error(data.error);
-      
-      // Update only the visible windows with their responses
-      setWindows(prev => prev.map(window => {
-        if (!window.isVisible) return window;
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        // Append new chunk to buffer
+        buffer += decoder.decode(value, { stream: true });
+
+        // Process complete lines from buffer
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
         
-        const responseKey = window.id;
+        for (const line of lines) {
+          if (line.trim() && line.startsWith('data: ')) {
+            try {
+              const jsonStr = line.slice(5).trim(); // Remove 'data: ' prefix
+              const data = JSON.parse(jsonStr);
+              const windowId = MODEL_TO_WINDOW_MAP[data.model];
 
-        console.log(window.id)
-        console.log(window.title)
-        console.log(responseKey)
-
-        if (data[responseKey]) {
-          return {
-            ...window,
-            messages: [...window.messages, { text: data[responseKey], sender: 'bot' }]
-          };
+              // Process each window's response
+              if (windowId && visibleWindowIds.includes(windowId)) {
+                responseAccumulator.current[windowId] += data.chunk;
+                
+                setWindows(prev => prev.map(window => {
+                  if (window.id === windowId && window.isVisible) {
+                    const messages = [...window.messages];
+                    const lastMessage = messages[messages.length - 1];
+                    if (lastMessage?.sender === 'bot') {
+                      messages[messages.length - 1] = {
+                        ...lastMessage,
+                        text: responseAccumulator.current[windowId]
+                      };
+                    } else {
+                      messages.push({
+                        text: responseAccumulator.current[windowId],
+                        sender: 'bot'
+                      });
+                    }
+                    return { ...window, messages };
+                  }
+                  return window;
+                }));
+              }        
+            } catch (parseError) {
+              console.error('Error parsing SSE data:', parseError);
+            }
+          }
         }
-        return window;
-      }));
-  
+      }
+
+      // Process any remaining data in buffer
+      if (buffer.trim() && buffer.startsWith('data: ')) {
+        try {
+          const jsonStr = buffer.slice(5).trim();
+          const data = JSON.parse(jsonStr);
+          
+          for (const windowId of visibleWindowIds) {
+            if (data[windowId]) {
+              const botMessage: ChatMessage = {
+                text: data[windowId],
+                sender: 'bot'
+              };
+              updateWindowWithMessage(windowId, botMessage);
+            }
+          }
+        } catch (parseError) {
+          console.error('Error parsing final SSE data:', parseError);
+        }
+      }
+
     } catch (error) {
       console.error('Error:', error);
       const errorMessage: ChatMessage = { 
@@ -263,15 +341,6 @@ export default function ChatInterface() {
     ));
   };
 
-  const togglePanel = () => {
-    console.log('Current state:', isPanelOpen);
-    setIsPanelOpen(prevState => {
-      console.log('Toggling from:', prevState, 'to:', !prevState);
-      return !prevState;
-  });
-    console.log('New state:', !isPanelOpen);
-};
-
   const visibleWindows = windows.filter(w => w.isVisible);
   const gridCols = visibleWindows.length > 0 ? visibleWindows.length : 1;
 
@@ -282,7 +351,7 @@ export default function ChatInterface() {
           windows={windows}
           onToggleWindow={handleToggleWindow}
           isOpen={isPanelOpen}
-          onTogglePanel={togglePanel}
+          onTogglePanel={() => setIsPanelOpen(!isPanelOpen)}
         />
         
         <div className={`transition-all duration-300 ${isPanelOpen ? 'ml-64' : 'ml-12'}`}>

@@ -17,14 +17,21 @@ class OpenaiClient:
             completion = self.openai.chat.completions.create(
                 model=self.model,
                 messages=self.messages,
+                stream=True
             )
-            assistant_message = completion.choices[0].message.content
-            self.messages.append({"role": "assistant", "content": assistant_message})
-            return assistant_message
+            collected_chunks = []
+            for chunk in completion:
+                if chunk.choices[0].delta.content is not None:
+                    collected_chunks.append(chunk.choices[0].delta.content)
+                    yield chunk.choices[0].delta.content
+
+            full_response = "".join(collected_chunks)
+            self.messages.append({"role": "assistant", "content": full_response})
+
         except Exception as e:
-            print(f"OpenAI API Error: {str(e)}")
-            self.messages.append({"role": "assistant", "content": f"Error getting Llama response: {str(e)}"})
-            return f"Error getting OpenAI response: {str(e)}"
+            error_message = f"Error getting OpenAI response: {str(e)}"
+            self.messages.append({"role": "assistant", "content": error_message})
+            yield error_message
         
     def update_messages(self, user_message):
         self.messages.append({"role": "user", "content": user_message})

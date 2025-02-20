@@ -61,9 +61,9 @@ export async function POST(request: NextRequest) {
         try {
           while (true) {
             // Check total stream duration
-            if (Date.now() - streamStartTime > MAX_TOTAL_STREAM_DURATION) {
-              throw new Error('Maximum stream duration exceeded');
-            }
+            // if (Date.now() - streamStartTime > MAX_TOTAL_STREAM_DURATION) {
+            //   throw new Error('Maximum stream duration exceeded');
+            // }
             // Reset timeout for next chunk
             resetChunkTimeout();
             const { done, value } = await reader.read();

@@ -1,13 +1,14 @@
 'use client'
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, ReactNode } from 'react';
+
 import AutoExpandingInput from '@/components/AutoExpandingInput';
 import SidePanel from '@/components/SidePanel';
 import { ChatMessage, ChatWindow } from '@/types/chat';
 
 const DEFAULT_WINDOWS: ChatWindow[] = [
-  { id: 'llama', title: 'Llama', messages: [], isVisible: true },
-  { id: 'anthropic', title: 'Anthropic', messages: [], isVisible: true },
-  { id: 'openai', title: 'OpenAI', messages: [], isVisible: true }
+  { id: 'llama', title: 'Qwen 2.5:3b', messages: [], isVisible: true },
+  { id: 'anthropic', title: 'Claude 3.5 Sonnet', messages: [], isVisible: true },
+  { id: 'openai', title: 'ChatGPT gpt-4o-mini', messages: [], isVisible: true }
 ];
 
 const MODEL_TO_WINDOW_MAP: Record<string, string> = {
@@ -48,19 +49,19 @@ const parseMarkdown = (text: string): React.ReactNode[] => {
             if (line.startsWith('### ')) {
               return (
                 <h3 key={lineIndex} className="text-xl font-bold mt-4 mb-2">
-                  {processBoldText(line.slice(4))}
+                  {processThinkTags(processBoldText(line.slice(4)))}
                 </h3>
               );
             } else if (line.startsWith('## ')) {
               return (
                 <h2 key={lineIndex} className="text-2xl font-bold mt-4 mb-2">
-                  {processBoldText(line.slice(3))}
+                  {processThinkTags(processBoldText(line.slice(3)))}
                 </h2>
               );
             } else if (line.startsWith('# ')) {
               return (
                 <h1 key={lineIndex} className="text-3xl font-bold mt-4 mb-2">
-                  {processBoldText(line.slice(2))}
+                  {processThinkTags(processBoldText(line.slice(2)))}
                 </h1>
               );
             }
@@ -68,7 +69,7 @@ const parseMarkdown = (text: string): React.ReactNode[] => {
             // Handle regular lines within a paragraph
             return (
               <React.Fragment key={lineIndex}>
-                {processBoldText(line)}
+                {processThinkTags(processBoldText(line))}
                 {lineIndex < lines.length - 1 && <br />}
               </React.Fragment>
             );
@@ -116,6 +117,27 @@ const processBoldText = (text: string): React.ReactNode[] => {
     return segment;
   });
 };
+
+const processThinkTags = (content: ReactNode): ReactNode => {
+  if (typeof content === 'string') {
+    const thinkSegments = content.split(/(<think>.*?<\/think>)/gs);
+    return thinkSegments.map((segment, index) => {
+      if (segment.startsWith('<think>') && segment.endsWith('</think>')) {
+        return (
+          <span key={index} className="italic text-blue-500">
+            {segment.slice(7, -8)}
+          </span>
+        );
+      }
+      return segment;
+    });
+  }
+  return content;
+};
+
+
+
+
 
 // Separate ChatWindow component
 const ChatWindowComponent: React.FC<{ messages: ChatMessage[]; title: string }> = ({ messages, title }) => {

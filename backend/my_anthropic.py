@@ -23,7 +23,6 @@ class AnthropicClient:
                 full_response = ""
                 for text in stream.text_stream:
                     full_response += text
-                    print(text)
                     yield text
                 
                 self.messages.append({"role": "assistant", "content": full_response})

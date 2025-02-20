@@ -21,7 +21,7 @@ load_dotenv()
 system_prompt = "You are a helpful assistant."
 
 clients = {
-    'llama': LlamaLocalClient(system_prompt),
+    'llama': LlamaLocalClient(system_prompt, "qwen2.5:3b"),
     'anthropic': AnthropicClient(os.environ.get("ANTHROPIC_API_KEY"), system_prompt),
     'openai': OpenaiClient(os.environ.get("OPENAI_API_KEY"), system_prompt)
 }

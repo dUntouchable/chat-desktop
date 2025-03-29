@@ -7,7 +7,8 @@ from typing import Generator
 class LlamaLocalClient:
     def __init__(self, system_prompt: str, model: str = "deepseek-r1:1.5b"):
         """Initialize the client with the base URL and system prompt."""
-        self.url = "http://localhost:11434/api/generate"
+        # self.url = "http://localhost:11434/api/generate"
+        self.url = "http://192.168.1.8:11434/api/generate"
         self.model = model
         self.system_prompt = system_prompt
         self.conversation_history = []
@@ -67,3 +68,9 @@ class LlamaLocalClient:
     def update_messages(self, user_message: str) -> str:
         self.conversation_history.append({"role": "user", "content": user_message})
         return self.get_llama_response(user_message)
+
+if __name__ == "__main__":
+    client = LlamaLocalClient("You are a helpful assistant.", "falcon3:10b-instruct-q4_K_M")
+    response = client.update_messages("Hello, how are you?")
+    for chunk in response:
+        print(chunk)

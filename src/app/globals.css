@@ -72,6 +72,10 @@ body {
   }
 }
 
+.lightRed {
+  background-color: #fffbfe; /* Light red color */
+}
+
 @layer base {
   * {
     @apply border-border;

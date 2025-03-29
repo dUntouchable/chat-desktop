@@ -2,7 +2,7 @@ from anthropic import Anthropic
 from typing import Generator
 
 class AnthropicClient:
-    def __init__(self, api_key: str, system_prompt: str, model: str = "claude-3-5-sonnet-latest"):
+    def __init__(self, api_key: str, system_prompt: str, model: str = "claude-3-7-sonnet-latest"):
         self.api_key = api_key
         self.anthropic = Anthropic(api_key=self.api_key)
         self.model = model

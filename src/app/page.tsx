@@ -1,22 +1,18 @@
 'use client'
-import React, { useState, useRef, useEffect, useCallback, ReactNode } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 
 import AutoExpandingInput from '@/components/AutoExpandingInput';
 import SidePanel from '@/components/SidePanel';
-import { ChatMessage, ChatWindow } from '@/types/chat';
+import AttachmentViewer from '@/components/AttachmentViewer';
+import { Attachment, ChatMessage, ChatWindow } from '@/types/chat';
+import { getWindowId } from '@/utils/modelMapping';
 
 const DEFAULT_WINDOWS: ChatWindow[] = [
-  { id: 'llama', title: 'Qwen 2.5:3b', messages: [], isVisible: true },
+  { id: 'llama', title: 'falcon3:10b', messages: [], isVisible: true },
+  // { id: 'llama', title: 'DeepSeek r1:1.5b', messages: [], isVisible: true },
   { id: 'anthropic', title: 'Claude 3.5 Sonnet', messages: [], isVisible: true },
   { id: 'openai', title: 'ChatGPT gpt-4o-mini', messages: [], isVisible: true }
 ];
-
-const MODEL_TO_WINDOW_MAP: Record<string, string> = {
-  'response1': 'llama',
-  'response2': 'anthropic',
-  'response3': 'openai'
-};
-
 
 const parseMarkdown = (text: string): React.ReactNode[] => {
   // First split by code blocks to preserve them
@@ -27,7 +23,7 @@ const parseMarkdown = (text: string): React.ReactNode[] => {
     if (segment.startsWith('```') && segment.endsWith('```')) {
       const code = segment.slice(3, -3);
       return (
-        <pre key={index} className="bg-gray-900 text-gray-100 p-3 rounded my-2 overflow-x-auto">
+        <pre key={index} className="lightRed text-black-100 p-3 rounded my-2 overflow-x-auto">
           <code>{code}</code>
         </pre>
       );
@@ -49,19 +45,19 @@ const parseMarkdown = (text: string): React.ReactNode[] => {
             if (line.startsWith('### ')) {
               return (
                 <h3 key={lineIndex} className="text-xl font-bold mt-4 mb-2">
-                  {processThinkTags(processBoldText(line.slice(4)))}
+                  {processBoldText(line.slice(4))}
                 </h3>
               );
             } else if (line.startsWith('## ')) {
               return (
                 <h2 key={lineIndex} className="text-2xl font-bold mt-4 mb-2">
-                  {processThinkTags(processBoldText(line.slice(3)))}
+                  {processBoldText(line.slice(3))}
                 </h2>
               );
             } else if (line.startsWith('# ')) {
               return (
                 <h1 key={lineIndex} className="text-3xl font-bold mt-4 mb-2">
-                  {processThinkTags(processBoldText(line.slice(2)))}
+                  {processBoldText(line.slice(2))}
                 </h1>
               );
             }
@@ -69,7 +65,7 @@ const parseMarkdown = (text: string): React.ReactNode[] => {
             // Handle regular lines within a paragraph
             return (
               <React.Fragment key={lineIndex}>
-                {processThinkTags(processBoldText(line))}
+                {processBoldText(line)}
                 {lineIndex < lines.length - 1 && <br />}
               </React.Fragment>
             );
@@ -90,24 +86,32 @@ const parseMarkdown = (text: string): React.ReactNode[] => {
               {processedLines}
             </p>
           );
-
-          // Wrap each paragraph in a p tag with proper spacing
-          return (
-            <p key={paragraphIndex} className="mb-4 last:mb-0">
-              {processedLines}
-            </p>
-          );
         })}
       </React.Fragment>
     );
   });
 };
 
-// Helper function to process bold text
+const processInlineCode = (text: string): React.ReactNode[] => {
+  const segments = text.split(/(`[^`]+`)/);
+  return segments.map((segment, index) => {
+    if (segment.startsWith('`') && segment.endsWith('`')) {
+      return (
+        <code key={index} className="bg-gray-100 text-red-600 px-1 py-0.5 rounded text-sm">
+          {segment.slice(1, -1)}
+        </code>
+      );
+    }
+    return segment;
+  });
+};
+
+// Modified helper function to process both bold text and inline code
 const processBoldText = (text: string): React.ReactNode[] => {
+  // First process bold text
   const boldSegments = text.split(/(\*\*.*?\*\*)/g);
-  return boldSegments.map((segment, index) => {
-    if (segment.startsWith('**') && segment.endsWith('**')) {
+  const processedBold: React.ReactNode[] = boldSegments.map((segment, index) => {
+    if (typeof segment === 'string' && segment.startsWith('**') && segment.endsWith('**')) {
       return (
         <strong key={index} className="font-bold">
           {segment.slice(2, -2)}
@@ -116,28 +120,20 @@ const processBoldText = (text: string): React.ReactNode[] => {
     }
     return segment;
   });
+
+  // Then process inline code within non-bold segments
+  return processedBold.map((segment, index) => {
+    if (React.isValidElement(segment)) {
+      return segment; // Return bold elements as-is
+    }
+    if (typeof segment === 'string') {
+      // Process remaining text for inline code
+      const codeProcessed = processInlineCode(segment);
+      return <React.Fragment key={index}>{codeProcessed}</React.Fragment>;
+    }
+    return segment;
+  });
 };
-
-const processThinkTags = (content: ReactNode): ReactNode => {
-  if (typeof content === 'string') {
-    const thinkSegments = content.split(/(<think>.*?<\/think>)/gs);
-    return thinkSegments.map((segment, index) => {
-      if (segment.startsWith('<think>') && segment.endsWith('</think>')) {
-        return (
-          <span key={index} className="italic text-blue-500">
-            {segment.slice(7, -8)}
-          </span>
-        );
-      }
-      return segment;
-    });
-  }
-  return content;
-};
-
-
-
-
 
 // Separate ChatWindow component
 const ChatWindowComponent: React.FC<{ messages: ChatMessage[]; title: string }> = ({ messages, title }) => {
@@ -184,39 +180,63 @@ const ChatWindowComponent: React.FC<{ messages: ChatMessage[]; title: string }> 
   );
 };
 
-// Error Boundary Component
-class ChatErrorBoundary extends React.Component<{ children: React.ReactNode }> {
-  state = { hasError: false };
-
-  static getDerivedStateFromError() {
-    return { hasError: true };
-  }
-
-  render() {
-    if (this.state.hasError) {
-      return (
-        <div className="p-4 text-red-500">
-          Something went wrong. Please refresh the page.
-        </div>
-      );
-    }
-
-    return this.props.children;
-  }
-}
-
 // Main Chat Interface Component
 export default function ChatInterface() {
   const [inputMessage, setInputMessage] = useState('');
   const [windows, setWindows] = useState<ChatWindow[]>(DEFAULT_WINDOWS);
   const [isLoading, setIsLoading] = useState(false);
   const [isPanelOpen, setIsPanelOpen] = useState(false);
-
+  
+  // Attachments state
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [viewingAttachment, setViewingAttachment] = useState<Attachment | null>(null);
+  
   const responseAccumulator = useRef<Record<string, string>>({
     llama: '',
     anthropic: '',
     openai: ''
   });
+
+  useEffect(() => {
+    // Function to check if there are unsaved messages
+    const hasActiveChat = () => {
+      return windows.some(window => window.messages.length > 0);
+    };
+
+    // Handle browser navigation (back/forward) and page refresh
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (hasActiveChat()) {
+        const message = 'You have active chat messages. Are you sure you want to leave?';
+        e.preventDefault();
+        e.returnValue = message;
+        return message;
+      }
+    };
+
+    // Handle popstate event (browser back/forward buttons)
+    const handlePopState = () => {
+      if (hasActiveChat()) {
+        if (!window.confirm('You have active chat messages. Are you sure you want to leave this page?')) {
+          // Stay on the current page
+          window.history.pushState(null, '', window.location.href);
+        }
+      }
+    };
+
+    // Add event listeners
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    window.addEventListener('popstate', handlePopState);
+    
+    // Push initial state
+    window.history.pushState(null, '', window.location.href);
+
+    // Cleanup
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, [windows]); // Add windows as dependency to check for messages
+
 
   const updateWindowWithMessage = useCallback((windowId: string, message: ChatMessage) => {
     setWindows(prev => prev.map(window => {
@@ -230,9 +250,27 @@ export default function ChatInterface() {
     }));
   }, []);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent, attachment?: Attachment) => {
     e.preventDefault();
-    if (!inputMessage.trim() || isLoading) return;
+    
+    if (!inputMessage.trim() && !attachment) return;
+    if (isLoading) return;
+
+    // Save the attachment to the attachments list if it exists
+    if (attachment) {
+      // Check if attachment with same ID already exists
+      const existingAttachment = attachments.find(att => att.id === attachment.id);
+      if (existingAttachment) {
+        // If duplicate ID exists, create a new ID by appending a timestamp
+        const newAttachment = {
+          ...attachment,
+          id: `${attachment.id}-${Date.now()}`
+        };
+        setAttachments(prev => [...prev, newAttachment]);
+      } else {
+        setAttachments(prev => [...prev, attachment]);
+      }
+    }
 
     responseAccumulator.current = {
       llama: '',
@@ -240,7 +278,15 @@ export default function ChatInterface() {
       openai: ''
     };
 
-    const userMessage: ChatMessage = { text: inputMessage, sender: 'user' };
+    // Create user message - show just "Sent attachment" if there's no text but there's an attachment
+    const displayText = inputMessage.trim() || (attachment ? "Sent attachment" : "");
+    const userMessage: ChatMessage = { 
+      text: displayText, 
+      sender: 'user'
+    };
+
+    // Use the original attachment content or the input message for the API call
+    const contentToSend = attachment ? attachment.content : inputMessage;
 
     const visibleWindowIds = windows
     .filter(w => w.isVisible)
@@ -254,17 +300,28 @@ export default function ChatInterface() {
     setInputMessage('');
     setIsLoading(true);
 
+    // Create an AbortController to handle request timeouts
+    const controller = new AbortController();
+    // Set a timeout to abort the request if it takes too long
+    const timeoutId = setTimeout(() => controller.abort(), 4 * 60 * 1000); // 4 minute timeout
+
     try {
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          message: inputMessage,
+          message: contentToSend,
           windows: visibleWindowIds
         }),
+        signal: controller.signal // Add the signal to enable request cancellation
       });
-
+      
       if (!response.ok) {
+        if (response.status === 413) {
+          // Handle "Payload Too Large" errors specifically
+          const errorData = await response.json();
+          throw new Error(errorData.details || 'Message is too large to process');
+        }
         throw new Error(`HTTP error! status: ${response.status}`);
       }
 
@@ -288,7 +345,7 @@ export default function ChatInterface() {
             try {
               const jsonStr = line.slice(5).trim(); // Remove 'data: ' prefix
               const data = JSON.parse(jsonStr);
-              const windowId = MODEL_TO_WINDOW_MAP[data.model];
+              const windowId = getWindowId(data.model);
 
               // Process each window's response
               if (windowId && visibleWindowIds.includes(windowId)) {
@@ -314,8 +371,8 @@ export default function ChatInterface() {
                   return window;
                 }));
               }        
-            } catch (parseError) {
-              console.error('Error parsing SSE data:', parseError);
+            } catch {
+              // Silent error handling
             }
           }
         }
@@ -336,15 +393,34 @@ export default function ChatInterface() {
               updateWindowWithMessage(windowId, botMessage);
             }
           }
-        } catch (parseError) {
-          console.error('Error parsing final SSE data:', parseError);
+        } catch {
+          // Silent error handling
         }
       }
 
     } catch (error) {
-      console.error('Error:', error);
+      // Create a more informative error message
+      let errorText = "Sorry, there was an error processing your request.";
+      
+      if (error instanceof Error) {
+        // Check for specific error types
+        if (error.name === 'AbortError') {
+          errorText = "The request was cancelled because it took too long. Try simplifying your query.";
+        } else if (error.message.includes('ECONNRESET') || error.message.includes('aborted')) {
+          errorText = "The connection was reset. This might be due to a timeout or server issue.";
+        } else if (error.message.includes('Maximum stream duration exceeded') || 
+            error.message.includes('time limit') ||
+            error.message.includes('timeout')) {
+          errorText = "The response took too long to generate. Try simplifying your query or try again later.";
+        } else if (error.message.includes('too large')) {
+          errorText = "Your message is too large. Please shorten it and try again.";
+        } else if (error.message.includes('HTTP error')) {
+          errorText = `Server error: ${error.message}. Please try again later.`;
+        }
+      }
+      
       const errorMessage: ChatMessage = { 
-        text: "Sorry, there was an error processing your request. Please try again.",
+        text: errorText,
         sender: 'bot'
       };
       
@@ -354,6 +430,7 @@ export default function ChatInterface() {
       })));
     } finally {
       setIsLoading(false);
+      clearTimeout(timeoutId); // Clean up the timeout
     }
   };
 
@@ -361,6 +438,14 @@ export default function ChatInterface() {
     setWindows(prev => prev.map(window => 
       window.id === id ? { ...window, isVisible: !window.isVisible } : window
     ));
+  };
+
+  const handleViewAttachment = (attachment: Attachment) => {
+    setViewingAttachment(attachment);
+  };
+
+  const handleDeleteAttachment = (attachmentId: string) => {
+    setAttachments(prev => prev.filter(att => att.id !== attachmentId));
   };
 
   const visibleWindows = windows.filter(w => w.isVisible);
@@ -374,6 +459,9 @@ export default function ChatInterface() {
           onToggleWindow={handleToggleWindow}
           isOpen={isPanelOpen}
           onTogglePanel={() => setIsPanelOpen(!isPanelOpen)}
+          attachments={attachments}
+          onViewAttachment={handleViewAttachment}
+          onDeleteAttachment={handleDeleteAttachment}
         />
         
         <div className={`transition-all duration-300 ${isPanelOpen ? 'ml-64' : 'ml-12'}`}>
@@ -402,6 +490,14 @@ export default function ChatInterface() {
           isPanelOpen={isPanelOpen}
         />
       </div>
+      
+      {/* Attachment Viewer */}
+      {viewingAttachment && (
+        <AttachmentViewer 
+          attachment={viewingAttachment} 
+          onClose={() => setViewingAttachment(null)}
+        />
+      )}
     </div>
   );
 }

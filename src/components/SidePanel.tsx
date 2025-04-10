@@ -1,4 +1,4 @@
-import { PanelLeftClose, PanelLeftOpen, Eye, X } from "lucide-react";
+import { PanelLeftClose, PanelLeftOpen, Eye, X, Search } from "lucide-react";
 import { Button } from "./ui/button";
 import { ScrollArea } from "./ui/scroll-area";
 import { Switch } from "./ui/switch";
@@ -13,6 +13,7 @@ interface SidePanelProps {
   attachments: Attachment[];
   onViewAttachment: (attachment: Attachment) => void;
   onDeleteAttachment: (attachmentId: string) => void;
+  onRequestWebSearch?: () => void;
 }
 
 const SidePanel: React.FC<SidePanelProps> = ({ 
@@ -22,7 +23,8 @@ const SidePanel: React.FC<SidePanelProps> = ({
   onTogglePanel,
   attachments,
   onViewAttachment,
-  onDeleteAttachment
+  onDeleteAttachment,
+  onRequestWebSearch
 }) => {
   const [activeTab, setActiveTab] = useState<'windows' | 'attachments'>('windows');
 
@@ -74,7 +76,7 @@ const SidePanel: React.FC<SidePanelProps> = ({
             </button>
           </div>
 
-          <ScrollArea className="h-[calc(100%-3.5rem)] px-4">
+          <ScrollArea className="h-[calc(100%-7.5rem)] px-4">
             {activeTab === 'windows' ? (
               <div className="space-y-4 py-4">
                 <h3 className="font-semibold text-lg dark:text-white">Chat Windows</h3>
@@ -138,6 +140,19 @@ const SidePanel: React.FC<SidePanelProps> = ({
               </div>
             )}
           </ScrollArea>
+          
+          <div className="absolute bottom-0 left-0 w-full px-4 py-3 border-t border-gray-200 dark:border-gray-700 space-y-2">
+            {onRequestWebSearch && (
+              <Button 
+                variant="outline" 
+                className="w-full flex items-center justify-center gap-2 py-2"
+                onClick={onRequestWebSearch}
+              >
+                <Search size={16} />
+                <span>Search Web</span>
+              </Button>
+            )}
+          </div>
         </>
       )}
     </div>

@@ -1,152 +1,186 @@
 import os
 import asyncio
-from flask import Flask, request, jsonify, Response, stream_with_context
-from flask_cors import CORS
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel
+from typing import List, Dict, Any, Optional, AsyncGenerator, Union, Callable
 from my_llama import LlamaLocalClient
 from my_anthropic import AnthropicClient
 from my_openai import OpenaiClient
 from dotenv import load_dotenv
-from concurrent.futures import ThreadPoolExecutor
-from typing import List, Dict, Any
-from queue import Queue, Empty
-from threading import Thread
 import json
+import logging
+import uvicorn
 
-app = Flask(__name__)
-CORS(app)  # Enable CORS for all routes
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("app")
+
+app = FastAPI()
+
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
+)
 
 # Load environment variables
 load_dotenv()
 
-system_prompt = "You are a helpful assistant."
+system_prompt = "You are a helpful assistant with access to advanced tools. Use them when appropriate to provide more accurate and helpful information."
 
+# Pydantic models for request validation
+class ChatRequestBody(BaseModel):
+    message: str
+    windows: Optional[List[str]] = None
+    attachment: Optional[Dict[str, Any]] = None
+
+# Initialize clients
 clients = {
-    # 'llama': LlamaLocalClient(system_prompt, "qwen2.5-coder:7b-instruct-q5_K_S"),
-    # 'llama': LlamaLocalClient(system_prompt),
     'llama': LlamaLocalClient(system_prompt, "falcon3:10b-instruct-q4_K_M"),
     'anthropic': AnthropicClient(os.environ.get("ANTHROPIC_API_KEY"), system_prompt),
     'openai': OpenaiClient(os.environ.get("OPENAI_API_KEY"), system_prompt)
 }
 
+# Map client IDs to response names
 response_map = {
     'llama': 'response1',
     'anthropic': 'response2',
     'openai': 'response3'
 }
 
-executor = ThreadPoolExecutor(max_workers=3)
+@app.post("/chat-stream")
+async def chat_stream(req: ChatRequestBody):
+    print("     req: ", req)
+    """Handle streaming chat requests with SSE response"""
+    if not req.message:
+        raise HTTPException(status_code=400, detail="Message parameter is required")
 
-async def get_selected_responses(message: str, active_windows: List[str] = None) -> Dict[str, Any]:    
-    loop = asyncio.get_event_loop()
-    selected_clients = active_windows if active_windows else list(clients.keys())
-
+    # Validate requested windows
+    if req.windows:
+        active_windows = [w for w in req.windows if w in clients]
+        if not active_windows:
+            raise HTTPException(status_code=400, detail="No valid window IDs provided")
+    else:
+        active_windows = list(clients.keys())
     
-    async def process_response(client_id: str) -> tuple[str, str]:
-        response_gen = await loop.run_in_executor(
-            executor, 
-            clients[client_id].update_messages, 
-            message
+    logger.info(f"Processing message with clients: {active_windows}")
+    
+    async def generate():
+        # Create tasks for all active clients
+        tasks = [process_client_messages(client_id, req.message) for client_id in active_windows]
+        
+        # Process all tasks concurrently and yield results as they arrive
+        async for result in merge_async_generators(tasks):
+            yield result
+    
+    # Return a streaming response with SSE media type
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        }
+    )
+
+async def process_client_messages(client_id: str, message: str):
+    """Process messages from any client and yield formatted SSE messages."""
+    try:
+        logger.info(f"Processing message with {client_id} client")
+        # Get the client response
+        response = clients[client_id].update_messages(message)
+        
+        # Handle the response based on its type
+        if hasattr(response, '__aiter__'):  # Async generator (like Anthropic)
+            async for chunk in response:
+                if chunk:
+                    logger.debug(f"Yielding chunk from {client_id}")
+                    yield format_sse_message(client_id, chunk)
+                    
+        elif hasattr(response, '__iter__') and not isinstance(response, str):  # Sync generator
+            for chunk in response:
+                if chunk:
+                    logger.debug(f"Yielding chunk from {client_id}")
+                    yield format_sse_message(client_id, chunk)
+        else:  # Single response
+            logger.debug(f"Yielding single response from {client_id}")
+            yield format_sse_message(client_id, response)
+            
+    except Exception as e:
+        logger.error(f"Error in {client_id} client: {str(e)}")
+        yield format_sse_message(client_id, f"Error: {str(e)}")
+
+async def merge_async_generators(generators):
+    """Merge multiple async generators into one, yielding items as they become available."""
+    # Create a task for the first item from each generator
+    pending_tasks = {}
+    for i, gen in enumerate(generators):
+        task = asyncio.create_task(anext_with_index(i, gen))
+        pending_tasks[task] = i
+    
+    # Keep processing until all generators are exhausted
+    while pending_tasks:
+        # Wait for any task to complete
+        done, pending = await asyncio.wait(
+            pending_tasks.keys(),
+            return_when=asyncio.FIRST_COMPLETED
         )
-        # Convert generator to string if needed
-        if hasattr(response_gen, '__iter__') and not isinstance(response_gen, (str, dict)):
-            response_text = ''.join(chunk for chunk in response_gen)
-        else:
-            response_text = response_gen
-        return response_text
+        
+        # Process completed tasks
+        for task in done:
+            gen_index = pending_tasks.pop(task)
+            try:
+                # Get the result and yield it
+                item, gen = task.result()
+                if item:
+                    logger.debug(f"Yielding message from generator {gen_index}")
+                    yield item
+                
+                # Schedule the next item from this generator
+                next_task = asyncio.create_task(anext_with_index(gen_index, gen))
+                pending_tasks[next_task] = gen_index
+            except StopAsyncIteration:
+                # This generator is exhausted
+                logger.debug(f"Generator {gen_index} is exhausted")
+                pass
+            except Exception as e:
+                logger.error(f"Error processing generator {gen_index}: {str(e)}")
+
+async def anext_with_index(index, agen):
+    """Get the next item from an async generator, along with the generator itself."""
+    item = await anext(agen)
+    return item, agen
+
+def format_sse_message(client_id, chunk):
+    """Format a message for SSE."""
+    # Convert non-primitive types to string
+    if not isinstance(chunk, (str, int, float, bool, type(None))):
+        chunk_str = str(chunk)
+    else:
+        chunk_str = chunk
     
-    responses = await asyncio.gather(*[
-        process_response(client_id) for client_id in selected_clients if client_id in clients
-    ])
+    # Create the response data
+    response_data = {
+        'model': response_map.get(client_id, 'unknown'),
+        'chunk': chunk_str
+    }
     
+    # Format as SSE message
+    return f"data: {json.dumps(response_data)}\n\n"
+
+@app.get("/health")
+async def health():
+    """Health check endpoint"""
     return {
-        response_map[client_id]: response
-        for client_id, response in zip(selected_clients, responses)
+        'status': 'healthy',
+        'models': list(clients.keys())
     }
 
-@app.route('/chat', methods=['GET'])
-def chat():
-    async def async_chat():
-        try:
-            message = request.args.get('message')
-            active_windows = request.args.get('windows', '').split(',') if request.args.get('windows') else None
-            
-            if not message:
-                return jsonify({
-                    'error': 'Message parameter is required'
-                }), 400
-            if active_windows:
-                active_windows = [w for w in active_windows if w in clients]
-                if not active_windows:
-                    return jsonify({
-                        'error': 'No valid window IDs provided'
-                    }), 400
-            responses = await get_selected_responses(message, active_windows)
-            return jsonify(responses)
-        except Exception as e:
-            print(f"Error in chat endpoint: {str(e)}")
-            return jsonify({
-                'error': 'Internal server error processing chat request'
-            }), 500
-    return asyncio.run(async_chat())
-
-
-@app.route('/chat-stream', methods=['POST'])
-def chat_stream():
-    data = request.get_json()
-    message = data.get('message')
-    active_windows = data.get('windows', '') if data.get('windows') else None
-    # message = request.args.get('message')
-    # active_windows = request.args.get('windows', '').split(',') if request.args.get('windows') else None
-
-    if not message:
-        return jsonify({'error': 'Message parameter is required'}), 400
-
-    if active_windows:
-        active_windows = [w for w in active_windows if w in clients]
-        if not active_windows:
-            return jsonify({'error': 'No valid window IDs provided'}), 400
-
-    def generate():
-        queues = {client_id: Queue() for client_id in active_windows or clients.keys()}
-
-        def process_model(client_id):
-            try:
-                for chunk in clients[client_id].update_messages(message):
-                    queues[client_id].put((client_id, chunk))
-            except Exception as e:
-                queues[client_id].put((client_id, f"Error: {str(e)}"))
-            finally:
-                queues[client_id].put((client_id, None))  # Signal completion
-
-        # Start threads for each model
-        threads = []
-        for client_id in (active_windows or clients.keys()):
-            thread = Thread(target=process_model, args=(client_id,))
-            thread.start()
-            threads.append(thread)
-
-        active_models = set(active_windows or clients.keys())
-        while active_models:
-            for client_id in list(active_models):
-                queue = queues[client_id]
-                try:
-                    model_id, chunk = queue.get_nowait()
-                    if chunk is None:
-                        active_models.remove(client_id)
-                    else:
-                        response_data = {
-                            'model': response_map[model_id],
-                            'chunk': chunk
-                        }
-                        yield f"data: {json.dumps(response_data)}\n\n"
-                except Empty:
-                    continue
-
-    return Response(stream_with_context(generate()), 
-                   mimetype='text/event-stream',
-                   headers={'Cache-Control': 'no-cache',
-                           'Transfer-Encoding': 'chunked'})
-
-
-if __name__ == '__main__':
-    app.run(debug=True)
+if __name__ == "__main__":
+    # Start the FastAPI app with Uvicorn
+    uvicorn.run(app, host="localhost", port=5000)

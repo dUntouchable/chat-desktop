@@ -7,6 +7,8 @@ export interface ChatRequestBody {
   message: string;
   windows?: ChatWindowId[]; // Optional array of active window IDs
   attachment?: Attachment;  // Optional attachment
+  web_search?: boolean;     // Flag to enable web search
+  multi_agent?: boolean;    // Flag to enable multi-agent system
 }
 
 export interface StreamChunk {
@@ -57,7 +59,13 @@ export async function POST(request: NextRequest) {
     const flaskResponse = await fetch(flaskUrl, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(data),
+      body: JSON.stringify({
+        message: data.message,
+        windows: data.windows,
+        web_search: data.web_search,
+        multi_agent: data.multi_agent,
+        attachment: data.attachment
+      }),
       signal: controller.signal
     });
 

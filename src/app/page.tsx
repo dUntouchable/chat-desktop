@@ -1,5 +1,6 @@
 'use client'
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { Search } from 'lucide-react';
 
 import AutoExpandingInput from '@/components/AutoExpandingInput';
 import SidePanel from '@/components/SidePanel';
@@ -10,7 +11,7 @@ import { getWindowId } from '@/utils/modelMapping';
 const DEFAULT_WINDOWS: ChatWindow[] = [
   { id: 'llama', title: 'falcon3:10b', messages: [], isVisible: true },
   // { id: 'llama', title: 'DeepSeek r1:1.5b', messages: [], isVisible: true },
-  { id: 'anthropic', title: 'Claude 3.5 Sonnet', messages: [], isVisible: true },
+  { id: 'anthropic', title: 'Claude 3.7 Sonnet', messages: [], isVisible: true },
   { id: 'openai', title: 'ChatGPT gpt-4o-mini', messages: [], isVisible: true }
 ];
 
@@ -191,6 +192,9 @@ export default function ChatInterface() {
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [viewingAttachment, setViewingAttachment] = useState<Attachment | null>(null);
   
+  // Feature flags
+  const [useWebSearch, setUseWebSearch] = useState(false);
+  
   const responseAccumulator = useRef<Record<string, string>>({
     llama: '',
     anthropic: '',
@@ -311,7 +315,9 @@ export default function ChatInterface() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: contentToSend,
-          windows: visibleWindowIds
+          windows: visibleWindowIds,
+          web_search: useWebSearch,
+          multi_agent: true // Always enable multi-agent
         }),
         signal: controller.signal // Add the signal to enable request cancellation
       });
@@ -447,6 +453,29 @@ export default function ChatInterface() {
   const handleDeleteAttachment = (attachmentId: string) => {
     setAttachments(prev => prev.filter(att => att.id !== attachmentId));
   };
+  
+  const handleRequestWebSearch = () => {
+    setUseWebSearch(true);
+    // Optionally close the panel after selecting
+    setIsPanelOpen(false);
+    
+    // Show a notification to the user
+    const searchMsg: ChatMessage = { 
+      text: "🔍 Web search enabled for next message", 
+      sender: 'bot' 
+    };
+    
+    // Add notification to all visible windows
+    setWindows(prev => prev.map(window => {
+      if (window.isVisible) {
+        return {
+          ...window,
+          messages: [...window.messages, searchMsg]
+        };
+      }
+      return window;
+    }));
+  };
 
   const visibleWindows = windows.filter(w => w.isVisible);
   const gridCols = visibleWindows.length > 0 ? visibleWindows.length : 1;
@@ -462,7 +491,18 @@ export default function ChatInterface() {
           attachments={attachments}
           onViewAttachment={handleViewAttachment}
           onDeleteAttachment={handleDeleteAttachment}
+          onRequestWebSearch={handleRequestWebSearch}
         />
+        
+        {/* Show indicator for web search */}
+        <div className="fixed top-4 right-4 flex gap-2 z-50">
+          {useWebSearch && (
+            <div className="bg-blue-600 text-white px-3 py-2 rounded-lg shadow-lg flex items-center gap-2">
+              <Search size={16} />
+              <span>Web search enabled</span>
+            </div>
+          )}
+        </div>
         
         <div className={`transition-all duration-300 ${isPanelOpen ? 'ml-64' : 'ml-12'}`}>
           <div className="p-4">

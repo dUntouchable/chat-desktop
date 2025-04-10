@@ -1,0 +1,20 @@
+# Core dependencies
+fastapi==0.103.2
+uvicorn==0.23.2
+python-dotenv==1.0.0
+httpx==0.25.0
+anthropic==0.8.1
+openai==1.3.5
+ollama==0.1.5  # For local model interface
+
+# Streaming support
+sse-starlette==1.6.1
+
+# Pydantic for data validation
+pydantic==2.0.3
+
+# Pydantic AI for multi-agent capabilities
+pydantic-ai==0.1.0
+
+# Async support
+asyncio==3.4.3 
